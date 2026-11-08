@@ -1,0 +1,184 @@
+﻿<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#c0392b">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="stylesheet" href="leaflet/leaflet.css">
+<title>Giappone 2026</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;font-family:system-ui,sans-serif;background:#fafafa;color:#222}
+#app{display:flex;flex-direction:column;height:100%}
+header{background:#c0392b;color:#fff;padding:8px 12px;font-weight:600;display:flex;justify-content:space-between;align-items:center}
+header small{font-weight:400;opacity:.9}
+main{flex:1;position:relative;overflow:hidden}
+.view{position:absolute;inset:0;display:none;overflow:auto}
+.view.on{display:block}
+#view-map{overflow:hidden}
+#map{position:absolute;inset:0}
+nav{display:flex;border-top:1px solid #ddd;background:#fff;padding-bottom:env(safe-area-inset-bottom)}
+nav button{flex:1;border:0;background:none;padding:10px 0;font-size:13px;color:#666}
+nav button.on{color:#c0392b;font-weight:700}
+.bar{position:absolute;top:8px;left:8px;right:8px;z-index:1000;display:flex;gap:6px;flex-wrap:wrap}
+.chip,.bar select{border:0;border-radius:16px;padding:6px 12px;background:#fff;box-shadow:0 1px 4px #0004;font-size:13px}
+.chip.on{background:#c0392b;color:#fff}
+#locate{position:absolute;right:10px;bottom:20px;z-index:1000;width:48px;height:48px;border-radius:50%;border:0;background:#fff;box-shadow:0 1px 6px #0006;font-size:22px}
+.pad{padding:12px}
+.card{background:#fff;border-radius:10px;padding:10px 12px;margin:8px 0;box-shadow:0 1px 3px #0002}
+.card h3{margin:0 0 4px;font-size:16px}
+.card .meta{font-size:12px;color:#777}
+.btn{display:inline-block;margin:6px 6px 0 0;padding:6px 10px;border-radius:8px;background:#c0392b;color:#fff;text-decoration:none;font-size:13px;border:0}
+.btn.alt{background:#eee;color:#333}
+.done{opacity:.5}
+.day{border-left:5px solid #c0392b}
+.day.Kyoto{border-color:#8e44ad}
+.tag{font-size:11px;padding:1px 7px;border-radius:8px;background:#eee;margin-right:4px}
+ol.items{padding-left:20px;margin:6px 0}
+ol.items li{margin:3px 0}
+input[type=search]{width:100%;padding:10px;border:1px solid #ccc;border-radius:8px;font-size:15px}
+.num{background:#c0392b;color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-weight:700;border:2px solid #fff;box-shadow:0 1px 4px #0006}
+.me{background:#2980b9;border:3px solid #fff;border-radius:50%;width:16px;height:16px;box-shadow:0 0 6px #2980b9}
+</style>
+</head>
+<body>
+<div id="lock" style="position:fixed;inset:0;z-index:9999;background:#c0392b;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#fff"><div style="font-size:48px">🇯🇵</div><b>Giappone 2026</b><input id="pw" type="password" placeholder="Password" style="padding:10px;border-radius:8px;border:0;font-size:16px"><button id="go" class="btn alt">Entra</button><div id="err"></div></div>
+<div id="app">
+<header><span>🇯🇵 Giappone 2026</span><small id="today"></small></header>
+<main>
+ <section class="view on" id="view-map">
+  <div id="map"></div>
+  <div class="bar">
+   <button class="chip on" data-cat="all">Tutti</button>
+   <button class="chip" data-cat="luoghi">Luoghi</button>
+   <button class="chip" data-cat="ristoranti">Cibo</button>
+   <button class="chip" data-cat="eventi">Eventi</button>
+   <select id="city"><option value="">Tutte le città</option></select>
+  </div>
+  <button id="locate" title="Dove sono">📍</button>
+ </section>
+ <section class="view" id="view-days"><div class="pad" id="days"></div></section>
+ <section class="view" id="view-list"><div class="pad"><input type="search" id="q" placeholder="Cerca luogo, zona, nota…"><div id="list"></div></div></section>
+ <section class="view" id="view-tips"><div class="pad" id="tips"></div></section>
+</main>
+<nav>
+ <button class="on" data-v="map">🗺️<br>Mappa</button>
+ <button data-v="days">📅<br>Giorni</button>
+ <button data-v="list">📋<br>Elenco</button>
+ <button data-v="tips">💡<br>Consigli</button>
+</nav>
+</div>
+<script src="leaflet/leaflet.js"></script>
+<script>
+function start(PLACES,DAYS,TIPS){
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const P=PLACES.map(a=>({id:a[0],name:a[1],cat:a[2],area:a[3],city:a[4],lat:a[5],lng:a[6],note:a[7]}));
+const byId=Object.fromEntries(P.map(p=>[p.id,p]));
+const COL={luoghi:"#c0392b",ristoranti:"#e67e22",eventi:"#8e44ad"};
+const ICON={luoghi:"⛩️",ristoranti:"🍜",eventi:"🎉"};
+const DONE=new Set(JSON.parse(localStorage.getItem("done")||"[]"));
+const saveDone=()=>localStorage.setItem("done",JSON.stringify([...DONE]));
+let cat="all",city="",dayFilter=null,me=null;
+
+const map=L.map("map",{zoomControl:false}).setView([35.68,139.76],11);
+L.control.zoom({position:"bottomleft"}).addTo(map);
+L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",{maxZoom:18,attribution:"Tiles © Esri"}).addTo(map);
+const layer=L.layerGroup().addTo(map);
+
+const gmapsSearch=p=>"https://www.google.com/maps/search/?api=1&query="+encodeURIComponent(p.name+" "+p.city+" Japan");
+const gmapsNav=p=>"https://www.google.com/maps/dir/?api=1&travelmode=transit&destination="+(p.lat?p.lat+","+p.lng:encodeURIComponent(p.name+" "+p.city+" Japan"));
+const dist=(a,b)=>{const R=6371,r=x=>x*Math.PI/180,dl=r(b.lat-a.lat),dn=r(b.lng-a.lng);const h=Math.sin(dl/2)**2+Math.cos(r(a.lat))*Math.cos(r(b.lat))*Math.sin(dn/2)**2;return 2*R*Math.asin(Math.sqrt(h))};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function popup(p){
+ const d=me&&p.lat?` · ${dist(me,p).toFixed(1)} km da te`:"";
+ return `<b>${ICON[p.cat]} ${esc(p.name)}</b><br><span class="meta">${esc(p.area)}, ${esc(p.city)}${d}</span><br>${esc(p.note)}<br>
+ <a class="btn" target="_blank" href="${gmapsNav(p)}">Naviga</a><a class="btn alt" target="_blank" href="${gmapsSearch(p)}">Google Maps</a>
+ <button class="btn alt" onclick="toggleDone('${p.id}')">${DONE.has(p.id)?"✔ Fatto":"Segna come fatto"}</button>`;
+}
+function toggleDone(id){DONE.has(id)?DONE.delete(id):DONE.add(id);saveDone();render();renderList();renderDays();map.closePopup()}
+
+function render(){
+ layer.clearLayers();
+ let pts=[];
+ if(dayFilter){
+  const day=DAYS[dayFilter.i];
+  day.items.map(id=>byId[id]).filter(p=>p&&p.lat).forEach((p,n)=>{
+   const m=L.marker([p.lat,p.lng],{icon:L.divIcon({className:"",html:`<div class="num">${n+1}</div>`,iconSize:[26,26]})}).bindPopup(popup(p));
+   m.addTo(layer);pts.push([p.lat,p.lng]);
+  });
+  if(pts.length>1)L.polyline(pts,{color:"#c0392b",weight:3,dashArray:"6 6"}).addTo(layer);
+ } else {
+  P.filter(p=>p.lat&&(cat==="all"||p.cat===cat)&&(!city||p.city===city)).forEach(p=>{
+   L.circleMarker([p.lat,p.lng],{radius:8,color:"#fff",weight:2,fillColor:COL[p.cat],fillOpacity:DONE.has(p.id)?.35:.95}).bindPopup(popup(p)).addTo(layer);
+   pts.push([p.lat,p.lng]);
+  });
+ }
+ if(me)L.marker([me.lat,me.lng],{icon:L.divIcon({className:"",html:'<div class="me"></div>',iconSize:[16,16]})}).addTo(layer);
+ return pts;
+}
+function fit(pts){if(pts.length)map.fitBounds(pts,{padding:[40,40],maxZoom:14})}
+
+$$("[data-cat]").forEach(b=>b.onclick=()=>{dayFilter=null;cat=b.dataset.cat;$$("[data-cat]").forEach(x=>x.classList.toggle("on",x===b));fit(render())});
+[...new Set(P.map(p=>p.city))].forEach(c=>$("#city").insertAdjacentHTML("beforeend",`<option>${c}</option>`));
+$("#city").onchange=e=>{dayFilter=null;city=e.target.value;fit(render())};
+$("#locate").onclick=()=>navigator.geolocation.getCurrentPosition(pos=>{me={lat:pos.coords.latitude,lng:pos.coords.longitude};map.setView([me.lat,me.lng],14);render();renderList()},()=>alert("Posizione non disponibile: abilita la geolocalizzazione."),{enableHighAccuracy:true});
+
+function show(v){$$(".view").forEach(x=>x.classList.toggle("on",x.id==="view-"+v));$$("nav button").forEach(b=>b.classList.toggle("on",b.dataset.v===v));if(v==="map")setTimeout(()=>map.invalidateSize(),50)}
+$$("nav button").forEach(b=>b.onclick=()=>show(b.dataset.v));
+
+const fmt=d=>new Date(d+"T12:00").toLocaleDateString("it-IT",{weekday:"short",day:"numeric",month:"short"});
+function renderDays(){
+ const today=new Date().toISOString().slice(0,10);
+ $("#days").innerHTML=DAYS.map((d,i)=>`<div class="card day ${d.city}" id="day-${i}" ${d.d===today?'style="outline:2px solid #2980b9"':""}>
+  <h3>${fmt(d.d)} · ${esc(d.title)}</h3><span class="tag">${d.city}</span>${d.note?`<div class="meta">${esc(d.note)}</div>`:""}
+  <ol class="items">${d.items.map(id=>byId[id]).filter(Boolean).map(p=>`<li class="${DONE.has(p.id)?"done":""}">${ICON[p.cat]} ${esc(p.name)} <a href="${gmapsNav(p)}" target="_blank">↗</a></li>`).join("")}</ol>
+  <button class="btn" onclick="showDay(${i})">Vedi sulla mappa</button>
+  <a class="btn alt" target="_blank" href="${dayRoute(d)}">Percorso Google Maps</a></div>`).join("");
+}
+function dayRoute(d){
+ const ps=d.items.map(id=>byId[id]).filter(p=>p&&p.lat);if(!ps.length)return"#";
+ const loc=p=>p.lat+","+p.lng,last=ps[ps.length-1];
+ return "https://www.google.com/maps/dir/?api=1&travelmode=transit&origin="+loc(ps[0])+"&destination="+loc(last)+(ps.length>2?"&waypoints="+ps.slice(1,-1).map(loc).join("%7C"):"");
+}
+function showDay(i){dayFilter={i};show("map");const pts=render();setTimeout(()=>fit(pts),100)}
+
+function renderList(){
+ const q=$("#q").value.toLowerCase();
+ let l=P.filter(p=>!q||(p.name+p.area+p.city+p.note).toLowerCase().includes(q));
+ if(me)l.sort((a,b)=>(a.lat?dist(me,a):1e9)-(b.lat?dist(me,b):1e9));
+ $("#list").innerHTML=l.map(p=>`<div class="card ${DONE.has(p.id)?"done":""}"><h3>${ICON[p.cat]} ${esc(p.name)}</h3>
+  <div class="meta">${esc(p.area)}, ${esc(p.city)}${me&&p.lat?` · ${dist(me,p).toFixed(1)} km`:""}</div>${esc(p.note)}<br>
+  <a class="btn" target="_blank" href="${gmapsNav(p)}">Naviga</a><a class="btn alt" target="_blank" href="${gmapsSearch(p)}">Google Maps</a>
+  <button class="btn alt" onclick="toggleDone('${p.id}')">${DONE.has(p.id)?"✔ Fatto":"Fatto?"}</button></div>`).join("")||"<p>Nessun risultato</p>";
+}
+$("#q").oninput=renderList;
+$("#tips").innerHTML=TIPS.map(t=>`<div class="card"><h3>${t.t}</h3><ul>${t.i.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`).join("")+'<p class="meta">Coordinate approssimative: per la posizione esatta usa "Google Maps".</p>';
+$("#today").textContent=new Date().toLocaleDateString("it-IT",{day:"numeric",month:"short"});
+
+fit(render());renderDays();renderList();
+const t=DAYS.findIndex(d=>d.d===new Date().toISOString().slice(0,10));
+if(t>=0)show("days");
+window.toggleDone=toggleDone;window.showDay=showDay;
+}
+</script>
+<script>
+const $=s=>document.querySelector(s);
+async function unlock(pw){
+ const e=await (await fetch("data.enc.json",{cache:"no-cache"})).json();
+ const b=x=>Uint8Array.from(atob(x),c=>c.charCodeAt(0));
+ const k0=await crypto.subtle.importKey("raw",new TextEncoder().encode(pw),"PBKDF2",false,["deriveKey"]);
+ const k=await crypto.subtle.deriveKey({name:"PBKDF2",salt:b(e.salt),iterations:e.iter,hash:"SHA-256"},k0,{name:"AES-GCM",length:256},false,["decrypt"]);
+ return new TextDecoder().decode(await crypto.subtle.decrypt({name:"AES-GCM",iv:b(e.iv)},k,b(e.ct)));
+}
+function run(src){const d=new Function(src+";return {PLACES,DAYS,TIPS}")();$("#lock").remove();start(d.PLACES,d.DAYS,d.TIPS)}
+const saved=localStorage.getItem("data");
+if(saved)run(saved);
+$("#go").onclick=async()=>{try{const src=await unlock($("#pw").value);localStorage.setItem("data",src);run(src)}catch(e){$("#err").textContent="Password errata"}};
+$("#pw").onkeydown=e=>{if(e.key==="Enter")$("#go").click()};
+if("serviceWorker"in navigator)navigator.serviceWorker.register("sw.js");
+</script>
+</body>
+</html>
